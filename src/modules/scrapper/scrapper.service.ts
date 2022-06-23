@@ -42,6 +42,7 @@ export class ScrapperService {
   init = async (): Promise<void> => {
     this.isStopped = false;
     this.xmlService.init();
+    this.fileService.initS3();
     const browser = await puppeteer.launch();
     this.browser = browser;
     const page = await browser.newPage();
@@ -99,15 +100,14 @@ export class ScrapperService {
         const imagesPaths = [];
         let imageIndex = 0;
         const albumId = uuidv4();
-        const albumPath = `public/images/${albumId}`;
         for (const image of detailsData.images) {
           if (this.isStopped) {
             return;
           }
           imageIndex++;
-          const path = await this.fileService.writeImage(
+          const path = await this.fileService.uploadImage(
             image,
-            albumPath,
+            albumId,
             imageIndex,
             detailsData.images.length,
           );
@@ -115,11 +115,10 @@ export class ScrapperService {
         }
         const downloadPath = await this.fileService.buildAlbumArchive({
           albumId,
-          albumPath,
           imagesPaths,
         });
         detailsData.downloadPath = downloadPath;
-        if (process.env.ENABLE_POST_ALBUMS !== 'true') {
+        if (process.env.ENABLE_POST_ALBUMS === 'true') {
           const isRequestOversized = imagesPaths.length > 100;
           const album = await axios.post(
             `${process.env.CLIENT_SERVER_URL}/albums/scrapper-album`,
@@ -128,7 +127,7 @@ export class ScrapperService {
                 ? { ...detailsData, images: [] }
                 : { ...detailsData, images: imagesPaths },
               currentPageIndex,
-              albumPath,
+              albumPath: `images/${albumId}`,
               albumIndex,
             },
           );
