@@ -118,6 +118,7 @@ export class ScrapperService {
           imagesPaths,
         });
         detailsData.downloadPath = downloadPath;
+        detailsData.totalImages = imagesPaths.length;
         if (process.env.ENABLE_POST_ALBUMS === 'true') {
           const isRequestOversized = imagesPaths.length > 100;
           const album = await axios.post(
