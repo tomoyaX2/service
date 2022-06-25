@@ -119,6 +119,7 @@ export class ScrapperService {
         });
         detailsData.downloadPath = downloadPath;
         detailsData.totalImages = imagesPaths.length;
+        detailsData.preview = imagesPaths[0];
         if (process.env.ENABLE_POST_ALBUMS === 'true') {
           const isRequestOversized = imagesPaths.length > 100;
           const album = await axios.post(
@@ -159,7 +160,7 @@ export class ScrapperService {
       const dataToCheck = {} as Record<string, { name: string } | string>;
       if (detailsData.languages?.length && detailsData.title[0]) {
         dataToCheck.language = { name: detailsData.languages[0] };
-        dataToCheck.name = detailsData.title[0];
+        dataToCheck.title = detailsData.title[0];
         const { data: isDuplicate } = await axios.post(
           `${process.env.CLIENT_SERVER_URL}/albums/find-duplicate`,
           dataToCheck,
