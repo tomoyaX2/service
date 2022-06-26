@@ -11,6 +11,7 @@ import { S3 } from '@aws-sdk/client-s3';
 export class FileService {
   constructor(private logService: LogService) {}
   s3Client: S3;
+  retryCounter = 0;
 
   initS3() {
     const s3Client = new S3({
@@ -50,6 +51,7 @@ export class FileService {
     albumId: string;
     imagesPaths: string[];
   }): Promise<string> {
+    this.retryCounter = 0;
     try {
       if (!fs.existsSync('public')) {
         fs.mkdirSync('public');
@@ -148,10 +150,23 @@ export class FileService {
       const result = `${process.env.CDN_URL}/${returnPath}`;
       return result;
     } catch (e) {
-      this.logService.saveLog(
-        `ERROR HAPPENED, ${imageUrl}, ${referer}, ${JSON.stringify(e)}`,
-        'warn',
-      );
+      this.retryCounter++;
+      if (this.retryCounter > 5) {
+        await this.uploadImage(
+          {
+            imageUrl,
+            referer,
+            originalUrl,
+          },
+          albumId,
+          currentCount,
+          total,
+        );
+        this.logService.saveLog(
+          `ERROR HAPPENED, ${imageUrl}, ${referer}, ${JSON.stringify(e)}`,
+          'warn',
+        );
+      }
     }
   }
 }

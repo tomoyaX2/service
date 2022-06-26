@@ -47,13 +47,14 @@ export class ScrapperService {
     this.browser = browser;
     const page = await browser.newPage();
 
-    const htmlData = await this.parsePage({
-      page,
-      url: this.hostUrl,
-      selector: 'img.lazyload',
-    });
-    const lastPageIndex = this.getPagesAmount(htmlData);
-    const pages = Array.from(Array(lastPageIndex).keys());
+    // const htmlData = await this.parsePage({
+    //   page,
+    //   url: this.hostUrl,
+    //   selector: 'img.lazyload',
+    // });
+    // const lastPageIndex = this.getPagesAmount(htmlData);
+    const lastPageIndex = 200;
+    const pages = Array.from(Array(lastPageIndex).keys()).reverse();
     for (const pageIndex of pages) {
       if (this.isStopped) {
         return;
@@ -101,7 +102,7 @@ export class ScrapperService {
         let imageIndex = 0;
         const albumId = uuidv4();
         for (const image of detailsData.images) {
-          if (this.isStopped) {
+          if (this.isStopped || detailsData.images.length > 1000) {
             return;
           }
           imageIndex++;
