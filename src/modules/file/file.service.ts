@@ -6,6 +6,7 @@ import * as sharp from 'sharp';
 import { LogService } from '../log/log.service';
 import { PutObjectCommand } from '@aws-sdk/client-s3';
 import { S3 } from '@aws-sdk/client-s3';
+import * as sizeOf from 'buffer-image-size';
 
 @Injectable()
 export class FileService {
@@ -46,10 +47,10 @@ export class FileService {
 
   async buildAlbumArchive({
     albumId,
-    imagesPaths,
+    imageData,
   }: {
     albumId: string;
-    imagesPaths: string[];
+    imageData: { url: string; width: string; height: string }[];
   }): Promise<string> {
     this.retryCounter = 0;
     try {
@@ -79,12 +80,14 @@ export class FileService {
 
       archive.pipe(output);
 
-      for (const image of imagesPaths) {
+      for (const image of imageData) {
         if (image) {
           const fileName = `/${100000 + imageIndex}.png`;
           //   const filePath = tempAlbumImagesPath + fileName;
           const webpBuffer = await sharp(
-            image.replace('/images', 'public').replace(process.env.CDN_URL, ''),
+            image.url
+              .replace('/images', 'public')
+              .replace(process.env.CDN_URL, ''),
           ).toBuffer();
           //   await sharp(webpBuffer).toFile(filePath, (err) => {
           //     if (err) {
@@ -138,6 +141,8 @@ export class FileService {
         Body: response.data,
         ACL: 'public-read',
       };
+
+      const { width, height } = sizeOf(Buffer.from(response.data));
       await this.s3Client.send(new PutObjectCommand(bucketParams));
       const PNGBase64 = Buffer.from(response.data, 'binary').toString('base64');
       const tempPath = `public/${albumId}/${10000 + currentCount}.webp`;
@@ -147,8 +152,8 @@ export class FileService {
           `File ${currentCount}/${total}. Original URL: ${originalUrl}, current URL: ${returnPath}`,
         );
       });
-      const result = `${process.env.CDN_URL}/${returnPath}`;
-      return result;
+      const url = `${process.env.CDN_URL}/${returnPath}`;
+      return { url, width, height };
     } catch (e) {
       this.retryCounter++;
       if (this.retryCounter > 5) {

@@ -83,6 +83,7 @@ export const groupBySelector = async (
           () => document.querySelector('*').outerHTML,
         );
         const image$ = cheerio.load(htmlData);
+
         const imageUrl = image$('img.lillie').attr('src');
         items.push({
           imageUrl,

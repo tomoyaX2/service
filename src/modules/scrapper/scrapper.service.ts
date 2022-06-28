@@ -12,9 +12,9 @@ import { chunkArray } from 'src/shared/utils';
 import { XmlService } from '../xml/xml.service';
 
 const expectedClassNames = [
-  ExpectedTypes.ArtistCG,
-  ExpectedTypes.Doujinshi,
   ExpectedTypes.Manga,
+  ExpectedTypes.Doujinshi,
+  ExpectedTypes.ArtistCG,
   ExpectedTypes.GameCG,
 ];
 
@@ -52,26 +52,26 @@ export class ScrapperService {
     //   url: this.hostUrl,
     //   selector: 'img.lazyload',
     // });
-    // const lastPageIndex = this.getPagesAmount(htmlData);
-    const lastPageIndex = 200;
+    // const lastPageIndex = this.getPagesAmount(htmlData);x
+    const lastPageIndex = 180;
     const pages = Array.from(Array(lastPageIndex).keys()).reverse();
     for (const pageIndex of pages) {
       if (this.isStopped) {
         return;
       }
       await this.logService.createLogFile(`hitomi`);
-      this.logService.saveLog(`${pageIndex + 1}/${lastPageIndex} page`);
+      this.logService.saveLog(`${pageIndex}/${lastPageIndex} page`);
       const htmlData = await this.parsePage({
         page,
-        url: this.hostUrl + `/?page=${pageIndex + 1}`,
+        url: this.hostUrl + `/?page=${pageIndex - 1}`,
         selector: 'img.lazyload',
       });
       await this.processData(
         page,
         this.isStopped ? '' : htmlData,
-        pageIndex + 1,
+        pageIndex - 1,
       );
-      if (pageIndex + 1 === lastPageIndex) {
+      if (pageIndex - 1 === 0) {
         this.xmlService.finishXml();
         await browser.close();
       }
@@ -83,74 +83,85 @@ export class ScrapperService {
     htmlData: string,
     currentPageIndex: number,
   ) => {
-    if (this.isStopped) {
-      return;
-    }
-    const urls = await this.generateUrlsToParse(htmlData);
-
-    let albumIndex = 0;
-    for (const url of urls) {
+    try {
       if (this.isStopped) {
         return;
       }
-      albumIndex++;
-      this.logService.saveLog(`${albumIndex}/${urls.length} urls`);
-      const detailsData = await this.collectDetailsData(page, url);
-      const isDuplicate = await this.findDuplicate(detailsData);
-      if (detailsData && !isDuplicate) {
-        const imagesPaths = [];
-        let imageIndex = 0;
-        const albumId = uuidv4();
-        for (const image of detailsData.images) {
-          if (this.isStopped || detailsData.images.length > 1000) {
-            return;
-          }
-          imageIndex++;
-          const path = await this.fileService.uploadImage(
-            image,
-            albumId,
-            imageIndex,
-            detailsData.images.length,
-          );
-          imagesPaths.push(path);
-        }
-        const downloadPath = await this.fileService.buildAlbumArchive({
-          albumId,
-          imagesPaths,
-        });
-        detailsData.downloadPath = downloadPath;
-        detailsData.totalImages = imagesPaths.length;
-        detailsData.preview = imagesPaths[0];
-        if (process.env.ENABLE_POST_ALBUMS === 'true') {
-          const isRequestOversized = imagesPaths.length > 100;
-          const album = await axios.post(
-            `${process.env.CLIENT_SERVER_URL}/albums/scrapper-album`,
-            {
-              albumData: isRequestOversized
-                ? { ...detailsData, images: [] }
-                : { ...detailsData, images: imagesPaths },
-              currentPageIndex,
-              albumPath: `images/${albumId}`,
-              albumIndex,
-            },
-          );
-          this.xmlService.appendUrl(
-            `${process.env.CLIENT_URL}/albums/${album.data}`,
-          );
+      const urls = await this.generateUrlsToParse(htmlData);
 
-          if (isRequestOversized) {
-            for (const chunk of chunkArray(imagesPaths)) {
-              await axios.post(
-                `${process.env.CLIENT_SERVER_URL}/albums/scrapper-album-images`,
-                {
-                  images: chunk,
-                  albumId: album.data,
-                },
-              );
+      let albumIndex = 0;
+      for (const url of urls) {
+        if (this.isStopped) {
+          return;
+        }
+        albumIndex++;
+        this.logService.saveLog(`${albumIndex}/${urls.length} urls`);
+        const detailsData = await this.collectDetailsData(page, url);
+        const isDuplicate = await this.findDuplicate(detailsData);
+        const shouldParse =
+          detailsData &&
+          !isDuplicate &&
+          detailsData.languages.length &&
+          detailsData.images.length > 20 &&
+          detailsData.images.length < 800;
+
+        if (shouldParse) {
+          const imageData = [];
+          let imageIndex = 0;
+          const albumId = uuidv4();
+          for (const image of detailsData.images) {
+            if (this.isStopped) {
+              return;
+            }
+            imageIndex++;
+            const imageToUpload = await this.fileService.uploadImage(
+              image,
+              albumId,
+              imageIndex,
+              detailsData.images.length,
+            );
+            imageData.push(imageToUpload);
+          }
+          const downloadPath = await this.fileService.buildAlbumArchive({
+            albumId,
+            imageData,
+          });
+          detailsData.downloadPath = downloadPath;
+          detailsData.totalImages = imageData.length;
+          detailsData.preview = imageData[0].url;
+          if (process.env.ENABLE_POST_ALBUMS === 'true') {
+            const isRequestOversized = imageData.length > 100;
+            const album = await axios.post(
+              `${process.env.CLIENT_SERVER_URL}/albums/scrapper-album`,
+              {
+                albumData: isRequestOversized
+                  ? { ...detailsData, images: [] }
+                  : { ...detailsData, images: imageData },
+                currentPageIndex,
+                albumPath: `images/${albumId}`,
+                albumIndex,
+              },
+            );
+            this.xmlService.appendUrl(
+              `${process.env.CLIENT_URL}/album/${album.data}`,
+            );
+
+            if (isRequestOversized) {
+              for (const chunk of chunkArray(imageData)) {
+                await axios.post(
+                  `${process.env.CLIENT_SERVER_URL}/albums/scrapper-album-images`,
+                  {
+                    images: chunk,
+                    albumId: album.data,
+                  },
+                );
+              }
             }
           }
         }
       }
+    } catch (e) {
+      console.log(e, 'e');
     }
   };
 
