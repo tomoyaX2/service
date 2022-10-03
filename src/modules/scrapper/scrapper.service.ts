@@ -7,13 +7,11 @@ import { getSelectors, groupBySelector } from 'src/shared/selectors';
 import { LogService } from '../log/log.service';
 import { FileService } from '../file/file.service';
 import { v4 as uuidv4 } from 'uuid';
-import { XmlService } from '../xml/xml.service';
 import {
   allowToParse,
   checkIfBannedTitle,
   extendDetailsData,
   findDuplicateTitle,
-  sendImages,
 } from './utils';
 
 const expectedClassNames = [
@@ -42,11 +40,9 @@ export class ScrapperService {
   constructor(
     private readonly logService: LogService,
     private readonly fileService: FileService,
-    private readonly xmlService: XmlService,
   ) {}
   init = async (): Promise<void> => {
     this.isStopped = false;
-    this.xmlService.init();
     this.fileService.initS3();
     const browser = await puppeteer.launch();
     this.browser = browser;
@@ -65,23 +61,14 @@ export class ScrapperService {
         url: this.hostUrl + `/?page=${pageIndex - 1}`,
         selector: 'img.lazyload',
       });
-      await this.processData(
-        page,
-        this.isStopped ? '' : htmlData,
-        pageIndex - 1,
-      );
+      await this.processData(page, this.isStopped ? '' : htmlData);
       if (pageIndex - 1 === 0) {
-        this.xmlService.finishXml();
         await browser.close();
       }
     }
   };
 
-  processData = async (
-    page: puppeteer.Page,
-    htmlData: string,
-    currentPageIndex: number,
-  ) => {
+  processData = async (page: puppeteer.Page, htmlData: string) => {
     try {
       if (this.isStopped) {
         return;
@@ -125,16 +112,6 @@ export class ScrapperService {
             imageData,
           });
           Object.assign(detailsData, extendedDetailsData);
-          if (process.env.ENABLE_POST_ALBUMS === 'true') {
-            const albumUrl = await sendImages({
-              imageData,
-              detailsData,
-              currentPageIndex,
-              albumId,
-              albumIndex,
-            });
-            this.xmlService.appendUrl(albumUrl);
-          }
         }
       }
     } catch (e) {
@@ -229,7 +206,6 @@ export class ScrapperService {
 
   stopScrapper = async () => {
     this.isStopped = true;
-    this.xmlService.finishXml();
 
     this.browser.close();
   };
