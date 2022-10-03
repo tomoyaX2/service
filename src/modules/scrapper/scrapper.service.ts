@@ -5,11 +5,16 @@ import { ExpectedTypes } from 'src/shared/enums/ExpectedTypes';
 import { HitomiFields } from 'src/shared/enums/HitomiFields';
 import { getSelectors, groupBySelector } from 'src/shared/selectors';
 import { LogService } from '../log/log.service';
-import axios from 'axios';
 import { FileService } from '../file/file.service';
 import { v4 as uuidv4 } from 'uuid';
-import { chunkArray } from 'src/shared/utils';
 import { XmlService } from '../xml/xml.service';
+import {
+  allowToParse,
+  checkIfBannedTitle,
+  extendDetailsData,
+  findDuplicateTitle,
+  sendImages,
+} from './utils';
 
 const expectedClassNames = [
   ExpectedTypes.Manga,
@@ -47,13 +52,7 @@ export class ScrapperService {
     this.browser = browser;
     const page = await browser.newPage();
 
-    // const htmlData = await this.parsePage({
-    //   page,
-    //   url: this.hostUrl,
-    //   selector: 'img.lazyload',
-    // });
-    // const lastPageIndex = this.getPagesAmount(htmlData);x
-    const lastPageIndex = 180;
+    const lastPageIndex = 60;
     const pages = Array.from(Array(lastPageIndex).keys()).reverse();
     for (const pageIndex of pages) {
       if (this.isStopped) {
@@ -97,15 +96,10 @@ export class ScrapperService {
         albumIndex++;
         this.logService.saveLog(`${albumIndex}/${urls.length} urls`);
         const detailsData = await this.collectDetailsData(page, url);
-        const isDuplicate = await this.findDuplicate(detailsData);
-        const shouldParse =
-          detailsData &&
-          !isDuplicate &&
-          detailsData.languages.length &&
-          detailsData.images.length > 20 &&
-          detailsData.images.length < 800;
+        const isDuplicate = await findDuplicateTitle(detailsData);
+        const isBanned = await checkIfBannedTitle(detailsData);
 
-        if (shouldParse) {
+        if (allowToParse({ detailsData, isDuplicate, isBanned })) {
           const imageData = [];
           let imageIndex = 0;
           const albumId = uuidv4();
@@ -126,61 +120,26 @@ export class ScrapperService {
             albumId,
             imageData,
           });
-          detailsData.downloadPath = downloadPath;
-          detailsData.totalImages = imageData.length;
-          detailsData.preview = imageData[0].url;
+          const extendedDetailsData = extendDetailsData({
+            downloadPath,
+            imageData,
+          });
+          Object.assign(detailsData, extendedDetailsData);
           if (process.env.ENABLE_POST_ALBUMS === 'true') {
-            const isRequestOversized = imageData.length > 100;
-            const album = await axios.post(
-              `${process.env.CLIENT_SERVER_URL}/albums/scrapper-album`,
-              {
-                albumData: isRequestOversized
-                  ? { ...detailsData, images: [] }
-                  : { ...detailsData, images: imageData },
-                currentPageIndex,
-                albumPath: `images/${albumId}`,
-                albumIndex,
-              },
-            );
-            this.xmlService.appendUrl(
-              `${process.env.CLIENT_URL}/album/${album.data}`,
-            );
-
-            if (isRequestOversized) {
-              for (const chunk of chunkArray(imageData)) {
-                await axios.post(
-                  `${process.env.CLIENT_SERVER_URL}/albums/scrapper-album-images`,
-                  {
-                    images: chunk,
-                    albumId: album.data,
-                  },
-                );
-              }
-            }
+            const albumUrl = await sendImages({
+              imageData,
+              detailsData,
+              currentPageIndex,
+              albumId,
+              albumIndex,
+            });
+            this.xmlService.appendUrl(albumUrl);
           }
         }
       }
     } catch (e) {
       console.log(e, 'e');
     }
-  };
-
-  findDuplicate = async (
-    detailsData: Record<HitomiFields, any>,
-  ): Promise<boolean> => {
-    if (detailsData) {
-      const dataToCheck = {} as Record<string, { name: string } | string>;
-      if (detailsData.languages?.length && detailsData.title[0]) {
-        dataToCheck.language = { name: detailsData.languages[0] };
-        dataToCheck.title = detailsData.title[0];
-        const { data: isDuplicate } = await axios.post(
-          `${process.env.CLIENT_SERVER_URL}/albums/find-duplicate`,
-          dataToCheck,
-        );
-        return isDuplicate;
-      }
-    }
-    return false;
   };
 
   generateUrlsToParse = async (htmlData: string) => {
@@ -201,13 +160,6 @@ export class ScrapperService {
     } catch (e) {
       return [];
     }
-  };
-
-  getPagesAmount = (htmlData: string) => {
-    const $ = cheerio.load(htmlData);
-    const pagesList = $('.page-container ul li');
-    const lastPageData = pagesList[pagesList.length - 1];
-    return parseInt($(lastPageData).children('a').text());
   };
 
   parsePage = async ({
