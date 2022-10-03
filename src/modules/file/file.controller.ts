@@ -1,4 +1,4 @@
-import { Controller } from '@nestjs/common';
+import { Controller, Get } from '@nestjs/common';
 import { FileService } from './file.service';
 
 @Controller('file')
@@ -20,4 +20,9 @@ export class FileController {
   //   );
   //   return downloadUrl;
   // }
+
+  @Get('cleanup')
+  async cleanupStorage() {
+    return this.fileService.cleanupStorage();
+  }
 }

@@ -12,6 +12,7 @@ import {
   checkIfBannedTitle,
   extendDetailsData,
   findDuplicateTitle,
+  sendImages,
 } from './utils';
 
 const expectedClassNames = [
@@ -48,7 +49,7 @@ export class ScrapperService {
     this.browser = browser;
     const page = await browser.newPage();
 
-    const lastPageIndex = 60;
+    const lastPageIndex = 120;
     const pages = Array.from(Array(lastPageIndex).keys()).reverse();
     for (const pageIndex of pages) {
       if (this.isStopped) {
@@ -112,6 +113,12 @@ export class ScrapperService {
             imageData,
           });
           Object.assign(detailsData, extendedDetailsData);
+          await sendImages({
+            imageData,
+            detailsData,
+            albumId,
+            albumIndex,
+          });
         }
       }
     } catch (e) {

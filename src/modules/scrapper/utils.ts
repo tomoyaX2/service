@@ -76,7 +76,6 @@ export const extendDetailsData = ({ downloadPath, imageData }) => {
 export const sendImages = async ({
   imageData,
   detailsData,
-  currentPageIndex,
   albumId,
   albumIndex,
 }): Promise<string> => {
@@ -87,7 +86,6 @@ export const sendImages = async ({
       albumData: isRequestOversized
         ? { ...detailsData, images: [] }
         : { ...detailsData, images: imageData },
-      currentPageIndex,
       albumPath: `images/${albumId}`,
       albumIndex,
     },

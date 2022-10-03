@@ -4,7 +4,11 @@ import axios from 'axios';
 import * as fs from 'fs';
 import * as sharp from 'sharp';
 import { LogService } from '../log/log.service';
-import { PutObjectCommand } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  paginateListObjectsV2,
+  PutObjectCommand,
+} from '@aws-sdk/client-s3';
 import { S3 } from '@aws-sdk/client-s3';
 import * as sizeOf from 'buffer-image-size';
 
@@ -25,25 +29,6 @@ export class FileService {
     });
     this.s3Client = s3Client;
   }
-
-  // async requestAlbumUrlToDownload(albumId: string): Promise<string> {
-  //   const { data } = await axios.get(
-  //     `${process.env.CLIENT_SERVER_URL}/albums/${albumId}`,
-  //   );
-
-  //   const bucketParams = {
-  //     Bucket: 'scrapper-images-data',
-  //     Key: `${process.env.CDN_URL}/${data.downloadPath}`,
-  //   };
-
-  //   const url = await getSignedUrl(
-  //     this.s3Client,
-  //     new GetObjectCommand(bucketParams),
-  //     { expiresIn: 15 * 60 },
-  //   ); // Adjustable expiration.
-
-  //   return url;
-  // }
 
   async buildAlbumArchive({
     albumId,
@@ -174,4 +159,39 @@ export class FileService {
       }
     }
   }
+
+  cleanupStorage = async () => {
+    this.initS3();
+    const perPage = 5764; // get total pages to change this number
+    const { data } = await axios.get<{
+      data: { path: string }[];
+      total: number;
+    }>(`${process.env.CLIENT_SERVER_URL}/albums?page=1&perPage=${perPage}`);
+    const currentPaths = new Map();
+    for (const item of data.data) {
+      currentPaths.set(item.path.split('/')[1], item);
+    }
+    const bucketParams = {
+      Bucket: 'scrapper-images-data',
+      Key: 'images',
+    };
+    const itemsList = paginateListObjectsV2(
+      { client: this.s3Client, pageSize: 1000 },
+      bucketParams,
+    );
+    for await (const items of itemsList) {
+      for (const content of items.Contents) {
+        const isValid = currentPaths.has(content.Key.split('/')[1]);
+        if (!isValid && content.Key.startsWith('images')) {
+          // avoid filtering anything, except album images
+          await this.s3Client.send(
+            new DeleteObjectCommand({
+              Bucket: 'scrapper-images-data',
+              Key: content.Key,
+            }),
+          );
+        }
+      }
+    }
+  };
 }
