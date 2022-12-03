@@ -162,7 +162,7 @@ export class FileService {
 
   cleanupStorage = async () => {
     this.initS3();
-    const perPage = 5764; // get total pages to change this number
+    const perPage = 5000; // get total pages to change this number
     const { data } = await axios.get<{
       data: { path: string }[];
       total: number;

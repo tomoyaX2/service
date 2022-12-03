@@ -30,11 +30,11 @@ export const checkIfBannedTitle = async (
   try {
     if (detailsData) {
       if (detailsData.title[0]) {
-        const { data } = await axios.post<{ name: string; link: string }[]>(
+        const { data } = await axios.post<{ id: string; name: string }>(
           `${process.env.CLIENT_SERVER_URL}/blocked-albums/check`,
           { name: detailsData.title[0] },
         );
-        return !!data.length;
+        return !!data.id;
       }
     }
     return false;
@@ -58,8 +58,10 @@ export const allowToParse = ({
     !isDuplicate &&
     !isBanned &&
     detailsData.languages.length &&
-    detailsData.images.length > 20 &&
-    detailsData.images.length < 800
+    detailsData.images.length > 40 &&
+    (detailsData.type[0] === 'game CG'
+      ? detailsData.images.length < 2000
+      : detailsData.images.length < 1000)
   );
 };
 

@@ -49,7 +49,7 @@ export class ScrapperService {
     this.browser = browser;
     const page = await browser.newPage();
 
-    const lastPageIndex = 120;
+    const lastPageIndex = 5000;
     const pages = Array.from(Array(lastPageIndex).keys()).reverse();
     for (const pageIndex of pages) {
       if (this.isStopped) {
