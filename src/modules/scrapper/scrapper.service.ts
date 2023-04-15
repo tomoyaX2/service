@@ -184,9 +184,14 @@ export class ScrapperService {
       const $ = cheerio.load(htmlData);
       const fieldData = {} as Record<HitomiFields, any>;
       const bannedTags = process.env.BANNED_TAGS.split(',');
+      const allowedLanguages = process.env.ALLOWED_LANGUAGES.split(',');
       const bannedTagsMap = new Map();
+      const allowedLanguagesMap = new Map();
       for (const bannedTag of bannedTags) {
         bannedTagsMap.set(bannedTag, true);
+      }
+      for (const allowedLanguage of allowedLanguages) {
+        allowedLanguagesMap.set(allowedLanguage, true);
       }
       for (const key of expectedFields) {
         const data = await groupBySelector(
@@ -201,6 +206,17 @@ export class ScrapperService {
           );
           if (hasBannedTag) {
             this.logService.saveLog(`${fieldData.title[0]} has banned tag`);
+            return null;
+          }
+        }
+        if (key === HitomiFields.Languages) {
+          const isNotAllowedLanguage = !data.some((el) =>
+            allowedLanguagesMap.has(el.toLowerCase()),
+          );
+          if (isNotAllowedLanguage) {
+            this.logService.saveLog(
+              `${fieldData.title[0]} has banned language`,
+            );
             return null;
           }
         }
