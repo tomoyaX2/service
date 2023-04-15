@@ -19,16 +19,21 @@ export class CleanupService {
     const authorsResponse = await axios.get(
       `${process.env.CLIENT_SERVER_URL}/authors`,
     );
-    const series = await axios.get(`${process.env.CLIENT_SERVER_URL}/series`);
-    const tags = await axios.get(`${process.env.CLIENT_SERVER_URL}/tags`);
-    for (const author of authorsResponse.data.data.slice(0, 10)) {
-      const albumsData = await axios.post<{ total: number }>(
-        `${process.env.CLIENT_SERVER_URL}/albums/search`,
-        { page: 1, perPage: 1, authors: [author.id] },
-      );
-      if (!albumsData.data.total) {
-        authorIdsToDelete.push(author.id);
-      }
+    let index = 0;
+    // const series = await axios.get(`${process.env.CLIENT_SERVER_URL}/series`);
+    // const tags = await axios.get(`${process.env.CLIENT_SERVER_URL}/tags`);
+    for (const author of authorsResponse.data.data) {
+      try {
+        index++;
+        const albumsData = await axios.post<{ total: number }>(
+          `${process.env.CLIENT_SERVER_URL}/albums/search`,
+          { page: 1, perPage: 1, authors: [author.id] },
+        );
+        if (!albumsData.data.total) {
+          authorIdsToDelete.push(author.id);
+        }
+        console.log(index, '/', authorsResponse.data.data.length);
+      } catch (e) {}
     }
     await axios.delete(
       `${
@@ -36,5 +41,6 @@ export class CleanupService {
       }/authors?authorIds=${authorIdsToDelete.join(',')}`,
       { headers: { access_token: this.token } },
     );
+    console.log('done');
   };
 }
