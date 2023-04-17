@@ -15,30 +15,40 @@ export class CleanupService {
   };
 
   cleanup = async () => {
-    const authorIdsToDelete = [];
+    const idsToDelete = [];
+    let index = 1500;
     const authorsResponse = await axios.get(
       `${process.env.CLIENT_SERVER_URL}/authors`,
     );
-    let index = 0;
-    // const series = await axios.get(`${process.env.CLIENT_SERVER_URL}/series`);
-    // const tags = await axios.get(`${process.env.CLIENT_SERVER_URL}/tags`);
-    for (const author of authorsResponse.data.data) {
+    // const seriesResponse = await axios.get(
+    //   `${process.env.CLIENT_SERVER_URL}/series`,
+    // );
+    // const tagsResponse = await axios.get(
+    //   `${process.env.CLIENT_SERVER_URL}/tags`,
+    // );
+    // const languagesResponse = await axios.get(
+    //   `${process.env.CLIENT_SERVER_URL}/languages`,
+    // );
+    // const groupsResponse = await axios.get(
+    //   `${process.env.CLIENT_SERVER_URL}/groups`,
+    // );
+    for (const item of authorsResponse.data.data.slice(1500, 2246)) {
       try {
         index++;
         const albumsData = await axios.post<{ total: number }>(
           `${process.env.CLIENT_SERVER_URL}/albums/search`,
-          { page: 1, perPage: 1, authors: [author.id] },
+          { page: 1, perPage: 1, authors: [item.id] },
         );
         if (!albumsData.data.total) {
-          authorIdsToDelete.push(author.id);
+          idsToDelete.push(item.id);
         }
         console.log(index, '/', authorsResponse.data.data.length);
       } catch (e) {}
     }
     await axios.delete(
-      `${
-        process.env.CLIENT_SERVER_URL
-      }/authors?authorIds=${authorIdsToDelete.join(',')}`,
+      `${process.env.CLIENT_SERVER_URL}/authors?authorIds=${idsToDelete.join(
+        ',',
+      )}`,
       { headers: { access_token: this.token } },
     );
     console.log('done');
