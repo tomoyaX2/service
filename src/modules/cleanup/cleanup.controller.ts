@@ -7,6 +7,6 @@ export class CleanupController {
 
   @Get('')
   async cleanupDatabase() {
-    return this.cleanupService.cleanup();
+    // return this.cleanupService.cleanup();
   }
 }

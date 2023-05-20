@@ -16,10 +16,10 @@ export class CleanupService {
 
   cleanup = async () => {
     const idsToDelete = [];
-    let index = 1500;
-    const authorsResponse = await axios.get(
-      `${process.env.CLIENT_SERVER_URL}/authors`,
-    );
+    let index = 700;
+    // const authorsResponse = await axios.get(
+    //   `${process.env.CLIENT_SERVER_URL}/authors`,
+    // );
     // const seriesResponse = await axios.get(
     //   `${process.env.CLIENT_SERVER_URL}/series`,
     // );
@@ -29,10 +29,10 @@ export class CleanupService {
     // const languagesResponse = await axios.get(
     //   `${process.env.CLIENT_SERVER_URL}/languages`,
     // );
-    // const groupsResponse = await axios.get(
-    //   `${process.env.CLIENT_SERVER_URL}/groups`,
-    // );
-    for (const item of authorsResponse.data.data.slice(1500, 2246)) {
+    const groupsResponse = await axios.get(
+      `${process.env.CLIENT_SERVER_URL}/groups`,
+    );
+    for (const item of groupsResponse.data.data.slice(index, index + 350)) {
       try {
         index++;
         const albumsData = await axios.post<{ total: number }>(
@@ -42,11 +42,27 @@ export class CleanupService {
         if (!albumsData.data.total) {
           idsToDelete.push(item.id);
         }
-        console.log(index, '/', authorsResponse.data.data.length);
+        console.log(index, '/', groupsResponse.data.data.length);
       } catch (e) {}
     }
+    // await axios.delete(
+    //   `${process.env.CLIENT_SERVER_URL}/authors?authorIds=${idsToDelete.join(
+    //     ',',
+    //   )}`,
+    //   { headers: { access_token: this.token } },
+    // );
+    // await axios.delete(
+    //   `${process.env.CLIENT_SERVER_URL}/series?seriesIds=${idsToDelete.join(
+    //     ',',
+    //   )}`,
+    //   { headers: { access_token: this.token } },
+    // );
+    // await axios.delete(
+    //   `${process.env.CLIENT_SERVER_URL}/tags?tagIds=${idsToDelete.join(',')}`,
+    //   { headers: { access_token: this.token } },
+    // );
     await axios.delete(
-      `${process.env.CLIENT_SERVER_URL}/authors?authorIds=${idsToDelete.join(
+      `${process.env.CLIENT_SERVER_URL}/groups?groupIds=${idsToDelete.join(
         ',',
       )}`,
       { headers: { access_token: this.token } },

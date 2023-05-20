@@ -1,13 +1,22 @@
 import { Controller, Get } from '@nestjs/common';
 import { ScrapperService } from './scrapper.service';
+import { VideoService } from './video.service';
 
 @Controller('scrapper')
 export class ScrapperController {
-  constructor(private readonly scrapperService: ScrapperService) {}
+  constructor(
+    private readonly scrapperService: ScrapperService,
+    private readonly videoService: VideoService,
+  ) {}
 
-  @Get('start')
-  init(): void {
-    this.scrapperService.init();
+  @Get('start-manga')
+  initManga(): void {
+    this.scrapperService.initManga();
+  }
+
+  @Get('start-video')
+  initVideo(): void {
+    this.videoService.init();
   }
 
   @Get('stop')

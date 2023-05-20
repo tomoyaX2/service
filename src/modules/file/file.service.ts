@@ -11,6 +11,13 @@ import {
 } from '@aws-sdk/client-s3';
 import { S3 } from '@aws-sdk/client-s3';
 import * as sizeOf from 'buffer-image-size';
+import * as uuid from 'uuid';
+import * as stream from 'stream';
+import { promisify } from 'util';
+import { removeQualityIndexFromUrl } from './utils';
+import * as rimraf from 'rimraf';
+
+const supportedQuality = ['480p', '720p', '1080p'];
 
 @Injectable()
 export class FileService {
@@ -29,6 +36,86 @@ export class FileService {
     });
     this.s3Client = s3Client;
   }
+
+  downloadVideo = async ({
+    url,
+    id,
+    episodeIndex,
+  }: {
+    url: string;
+    id: string;
+    episodeIndex: number;
+  }) => {
+    const episodeId = uuid.v4();
+    const videoPath = `public/videos/${id}`;
+    const availableQuality = [];
+    let returnUrl = '';
+    let episodePath = `${videoPath}/${episodeId}.mp4`;
+    if (!fs.existsSync(videoPath)) {
+      fs.mkdirSync(videoPath, { recursive: true });
+    }
+    const finished = promisify(stream.finished);
+    const qualityEnabled = supportedQuality.some((qualityLevel) =>
+      url.endsWith(`${qualityLevel}.mp4`),
+    );
+    if (qualityEnabled) {
+      const clearUrl = removeQualityIndexFromUrl(url);
+      for (const quality of supportedQuality) {
+        try {
+          const response = await axios.get(
+            clearUrl.replace('.mp4', `${quality}.mp4`),
+            {
+              responseType: 'stream',
+            },
+          );
+          episodePath = episodePath.replace('.mp4', `-${quality}.mp4`);
+          console.log(`uploading ${quality} version`);
+          const writeStream = fs.createWriteStream(episodePath);
+
+          response.data.pipe(writeStream);
+          await finished(writeStream);
+          const returnPath = `videos/${id}/episode-${episodeIndex}-${quality}.mp4`;
+          returnUrl = `${process.env.CDN_URL}/${returnPath}`;
+          const bucketParams = {
+            Bucket: 'scrapper-images-data',
+            Key: returnPath,
+            Body: fs.createReadStream(episodePath),
+            ACL: 'public-read',
+          };
+
+          await this.s3Client.putObject(bucketParams);
+          availableQuality.push(quality);
+        } catch (e) {
+          console.log(`Quality: ${quality} doesn't exist`);
+        }
+      }
+    } else {
+      const response = await axios.get(url, {
+        responseType: 'stream',
+      });
+      const writeStream = fs.createWriteStream(episodePath);
+      console.log(`uploading default version`);
+
+      response.data.pipe(writeStream);
+      await finished(writeStream);
+      const returnPath = `videos/${id}/episode-${episodeIndex}.mp4`;
+      returnUrl = `${process.env.CDN_URL}/${returnPath}`;
+
+      const bucketParams = {
+        Bucket: 'scrapper-images-data',
+        Key: returnPath,
+        Body: fs.createReadStream(episodePath),
+        ACL: 'public-read',
+      };
+
+      await this.s3Client.putObject(bucketParams);
+    }
+    rimraf(videoPath, () => null);
+    return {
+      url: returnUrl,
+      availableQuality,
+    };
+  };
 
   async buildAlbumArchive({
     albumId,
@@ -91,6 +178,48 @@ export class FileService {
     }
   }
 
+  uploadVideoCoverImage = async ({
+    imageUrl,
+    id,
+  }: {
+    imageUrl: string;
+    id: string;
+  }) => {
+    try {
+      if (!fs.existsSync(`public/videos/${id}`)) {
+        fs.mkdirSync(`public/videos/${id}`, { recursive: true });
+      }
+      const response = await axios.get<string>(imageUrl, {
+        responseType: 'arraybuffer',
+      });
+      const returnPath = `videos/${id}/cover.webp`;
+      const bucketParams = {
+        Bucket: 'scrapper-images-data',
+        Key: returnPath,
+        Body: response.data,
+        ACL: 'public-read',
+      };
+      await this.s3Client.send(new PutObjectCommand(bucketParams));
+      const PNGBase64 = Buffer.from(response.data, 'binary').toString('base64');
+      const tempPath = `public/videos/${id}/cover.webp`;
+      await fs.writeFile(tempPath, PNGBase64, 'base64', (err) => {
+        if (err) throw err;
+        this.retryCounter = 0;
+      });
+      const url = `${process.env.CDN_URL}/${returnPath}`;
+      return { url };
+    } catch (e) {
+      this.retryCounter++;
+      if (this.retryCounter < 5) {
+        await this.uploadVideoCoverImage({ imageUrl, id });
+        this.logService.saveLog(
+          `ERROR HAPPENED, ${imageUrl}, ${JSON.stringify(e)}`,
+          'warn',
+        );
+      }
+    }
+  };
+
   async uploadImage(
     {
       imageUrl,
@@ -106,11 +235,8 @@ export class FileService {
     total: number,
   ) {
     try {
-      if (!fs.existsSync('public')) {
-        fs.mkdirSync('public');
-      }
       if (!fs.existsSync(`public/${albumId}`)) {
-        fs.mkdirSync(`public/${albumId}`);
+        fs.mkdirSync(`public/${albumId}`, { recursive: true });
       }
       const response = await axios.get<string>(imageUrl, {
         responseType: 'arraybuffer',
@@ -136,12 +262,13 @@ export class FileService {
         this.logService.saveLog(
           `File ${currentCount}/${total}. Original URL: ${originalUrl}, current URL: ${returnPath}`,
         );
+        this.retryCounter = 0;
       });
       const url = `${process.env.CDN_URL}/${returnPath}`;
       return { url, width, height };
     } catch (e) {
       this.retryCounter++;
-      if (this.retryCounter > 5) {
+      if (this.retryCounter < 5) {
         await this.uploadImage(
           {
             imageUrl,

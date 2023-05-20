@@ -42,14 +42,14 @@ export class ScrapperService {
     private readonly logService: LogService,
     private readonly fileService: FileService,
   ) {}
-  init = async (): Promise<void> => {
+  initManga = async (): Promise<void> => {
     this.isStopped = false;
     this.fileService.initS3();
     const browser = await puppeteer.launch();
     this.browser = browser;
     const page = await browser.newPage();
 
-    const lastPageIndex = 5000;
+    const lastPageIndex = 3500;
     const pages = Array.from(Array(lastPageIndex).keys()).reverse();
     for (const pageIndex of pages) {
       if (this.isStopped) {
@@ -126,7 +126,7 @@ export class ScrapperService {
     }
   };
 
-  generateUrlsToParse = async (htmlData: string) => {
+  generateUrlsToParse = (htmlData: string) => {
     try {
       const urls = [];
       const $ = cheerio.load(htmlData);
