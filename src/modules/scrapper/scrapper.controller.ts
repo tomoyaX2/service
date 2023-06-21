@@ -1,4 +1,4 @@
-import { Controller, Get } from '@nestjs/common';
+import { Controller, Get, Param } from '@nestjs/common';
 import { ScrapperService } from './scrapper.service';
 import { VideoService } from './video.service';
 

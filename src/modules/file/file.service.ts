@@ -14,7 +14,11 @@ import * as sizeOf from 'buffer-image-size';
 import * as uuid from 'uuid';
 import * as stream from 'stream';
 import { promisify } from 'util';
-import { removeQualityIndexFromUrl } from './utils';
+import {
+  addLeadingZeros,
+  executeCommand,
+  removeQualityIndexFromUrl,
+} from './utils';
 import * as rimraf from 'rimraf';
 
 const supportedQuality = ['480p', '720p', '1080p'];
@@ -41,22 +45,27 @@ export class FileService {
     url,
     id,
     episodeIndex,
+    m3u8Src,
   }: {
     url: string;
+    m3u8Src?: string;
     id: string;
     episodeIndex: number;
   }) => {
+    console.log(`downloading: ${url}`);
     const episodeId = uuid.v4();
     const videoPath = `public/videos/${id}`;
     const availableQuality = [];
     let returnUrl = '';
     let episodePath = `${videoPath}/${episodeId}.mp4`;
+    const returnPath = `videos/${id}/episode-${episodeIndex}.mp4`;
+
     if (!fs.existsSync(videoPath)) {
       fs.mkdirSync(videoPath, { recursive: true });
     }
     const finished = promisify(stream.finished);
     const qualityEnabled = supportedQuality.some((qualityLevel) =>
-      url.endsWith(`${qualityLevel}.mp4`),
+      url?.endsWith(`${qualityLevel}.mp4`),
     );
     if (qualityEnabled) {
       const clearUrl = removeQualityIndexFromUrl(url);
@@ -90,31 +99,86 @@ export class FileService {
         }
       }
     } else {
-      const response = await axios.get(url, {
-        responseType: 'stream',
-      });
-      const writeStream = fs.createWriteStream(episodePath);
-      console.log(`uploading default version`);
+      if (m3u8Src) {
+        console.log('download m3u8 list');
+        const m3u8SrcPath = `${videoPath}/paths.m3u8`;
+        const ffmpegPathsToCombine = `paths.txt`;
 
-      response.data.pipe(writeStream);
-      await finished(writeStream);
-      const returnPath = `videos/${id}/episode-${episodeIndex}.mp4`;
-      returnUrl = `${process.env.CDN_URL}/${returnPath}`;
+        const m3u8SrcFragmentsPath = `fragments`;
+        if (!fs.existsSync(m3u8SrcFragmentsPath)) {
+          fs.mkdirSync(m3u8SrcFragmentsPath, { recursive: true });
+        }
+        const m3u8SrcPathStream = fs.createWriteStream(m3u8SrcPath);
+        await fs.writeFileSync(ffmpegPathsToCombine, '');
+        const response = await axios.get(m3u8Src, {
+          responseType: 'stream',
+        });
 
-      const bucketParams = {
-        Bucket: 'scrapper-images-data',
-        Key: returnPath,
-        Body: fs.createReadStream(episodePath),
-        ACL: 'public-read',
+        response.data.pipe(m3u8SrcPathStream);
+        await finished(m3u8SrcPathStream);
+        const data = fs.readFileSync(m3u8SrcPath, 'utf8');
+        const regexp = /720p_.*\.ts/g;
+        const allFragmentsAmount = [...data.matchAll(regexp)].length - 1;
+        const allFragmentsIndexes = Array.from({
+          length: allFragmentsAmount + 1,
+        }).map((_, index) =>
+          addLeadingZeros(index, `${allFragmentsAmount}`.length),
+        );
+        for (const fragment of allFragmentsIndexes) {
+          const m3u8FragmentPath = `${m3u8SrcFragmentsPath}/${fragment}.mp4`;
+          await fs.appendFileSync(
+            ffmpegPathsToCombine,
+            `file ${m3u8FragmentPath}\n`,
+          );
+        }
+        const promises = allFragmentsIndexes.map(async (fragment) => {
+          const m3u8FragmentPath = `${m3u8SrcFragmentsPath}/${fragment}.mp4`;
+          const writeStream = fs.createWriteStream(m3u8FragmentPath);
+          const urlToGet = m3u8Src.replace('720p.m3u8', `720p_${fragment}.ts`);
+          const response = await axios.get(urlToGet, {
+            responseType: 'stream',
+          });
+
+          response.data.pipe(writeStream);
+          await finished(writeStream);
+        });
+        await Promise.all(promises);
+        await executeCommand(
+          `ffmpeg -f concat -safe 0 -i paths.txt -c copy public/${returnPath}`,
+        );
+        console.log('executed');
+        rimraf('fragments', () => null);
+        rimraf('paths.txt', () => null);
+
+        return { url: returnUrl, availableQuality };
+      } else {
+        const writeStream = fs.createWriteStream(episodePath);
+        console.log(url, 'url');
+        const response = await axios.get(url, {
+          responseType: 'stream',
+        });
+        console.log(`uploading default version`);
+
+        response.data.pipe(writeStream);
+        await finished(writeStream);
+        returnUrl = `${process.env.CDN_URL}/${returnPath}`;
+        console.log(returnUrl, 'returnUrl');
+        const bucketParams = {
+          Bucket: 'scrapper-images-data',
+          Key: returnPath,
+          Body: fs.createReadStream(episodePath),
+          ACL: 'public-read',
+        };
+
+        await this.s3Client.putObject(bucketParams);
+      }
+      rimraf(videoPath, () => null);
+
+      return {
+        url: returnUrl,
+        availableQuality,
       };
-
-      await this.s3Client.putObject(bucketParams);
     }
-    rimraf(videoPath, () => null);
-    return {
-      url: returnUrl,
-      availableQuality,
-    };
   };
 
   async buildAlbumArchive({
@@ -320,5 +384,14 @@ export class FileService {
         }
       }
     }
+  };
+
+  removeEpisode = async (url: string) => {
+    await this.s3Client.send(
+      new DeleteObjectCommand({
+        Bucket: 'scrapper-images-data',
+        Key: url.replace(`${process.env.CDN_URL}/`, ''),
+      }),
+    );
   };
 }

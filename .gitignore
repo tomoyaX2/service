@@ -4,3 +4,5 @@ public
 .env
 package-lock.json
 images
+fragments
+paths.txt
