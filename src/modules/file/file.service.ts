@@ -14,14 +14,7 @@ import * as sizeOf from 'buffer-image-size';
 import * as uuid from 'uuid';
 import * as stream from 'stream';
 import { promisify } from 'util';
-import {
-  addLeadingZeros,
-  executeCommand,
-  removeQualityIndexFromUrl,
-} from './utils';
 import * as rimraf from 'rimraf';
-
-const supportedQuality = ['480p', '720p', '1080p'];
 
 @Injectable()
 export class FileService {
@@ -45,139 +38,59 @@ export class FileService {
     url,
     id,
     episodeIndex,
-    m3u8Src,
   }: {
     url: string;
-    m3u8Src?: string;
     id: string;
     episodeIndex: number;
   }) => {
-    console.log(`downloading: ${url}`);
-    const episodeId = uuid.v4();
-    const videoPath = `public/videos/${id}`;
-    const availableQuality = [];
-    let returnUrl = '';
-    let episodePath = `${videoPath}/${episodeId}.mp4`;
-    const returnPath = `videos/${id}/episode-${episodeIndex}.mp4`;
+    try {
+      const episodeId = uuid.v4();
+      const videoPath = `public/videos/${id}`;
+      const availableQuality = [];
+      let returnUrl = '';
+      const episodePath = `${videoPath}/${episodeId}.mp4`;
+      const returnPath = `videos/${id}/episode-${episodeIndex}.mp4`;
 
-    if (!fs.existsSync(videoPath)) {
-      fs.mkdirSync(videoPath, { recursive: true });
-    }
-    const finished = promisify(stream.finished);
-    const qualityEnabled = supportedQuality.some((qualityLevel) =>
-      url?.endsWith(`${qualityLevel}.mp4`),
-    );
-    if (qualityEnabled) {
-      const clearUrl = removeQualityIndexFromUrl(url);
-      for (const quality of supportedQuality) {
-        try {
-          const response = await axios.get(
-            clearUrl.replace('.mp4', `${quality}.mp4`),
-            {
-              responseType: 'stream',
-            },
-          );
-          episodePath = episodePath.replace('.mp4', `-${quality}.mp4`);
-          console.log(`uploading ${quality} version`);
-          const writeStream = fs.createWriteStream(episodePath);
-
-          response.data.pipe(writeStream);
-          await finished(writeStream);
-          const returnPath = `videos/${id}/episode-${episodeIndex}-${quality}.mp4`;
-          returnUrl = `${process.env.CDN_URL}/${returnPath}`;
-          const bucketParams = {
-            Bucket: 'scrapper-images-data',
-            Key: returnPath,
-            Body: fs.createReadStream(episodePath),
-            ACL: 'public-read',
-          };
-
-          await this.s3Client.putObject(bucketParams);
-          availableQuality.push(quality);
-        } catch (e) {
-          console.log(`Quality: ${quality} doesn't exist`);
-        }
+      if (!fs.existsSync(videoPath)) {
+        fs.mkdirSync(videoPath, { recursive: true });
       }
-    } else {
-      if (m3u8Src) {
-        console.log('download m3u8 list');
-        const m3u8SrcPath = `${videoPath}/paths.m3u8`;
-        const ffmpegPathsToCombine = `paths.txt`;
+      const finished = promisify(stream.finished);
+      const writeStream = fs.createWriteStream(episodePath);
+      const response = await axios.get(url, {
+        responseType: 'stream',
+      });
 
-        const m3u8SrcFragmentsPath = `fragments`;
-        if (!fs.existsSync(m3u8SrcFragmentsPath)) {
-          fs.mkdirSync(m3u8SrcFragmentsPath, { recursive: true });
-        }
-        const m3u8SrcPathStream = fs.createWriteStream(m3u8SrcPath);
-        await fs.writeFileSync(ffmpegPathsToCombine, '');
-        const response = await axios.get(m3u8Src, {
-          responseType: 'stream',
-        });
+      response.data.pipe(writeStream);
+      await finished(writeStream);
+      returnUrl = `${process.env.CDN_URL}/${returnPath}`;
 
-        response.data.pipe(m3u8SrcPathStream);
-        await finished(m3u8SrcPathStream);
-        const data = fs.readFileSync(m3u8SrcPath, 'utf8');
-        const regexp = /720p_.*\.ts/g;
-        const allFragmentsAmount = [...data.matchAll(regexp)].length - 1;
-        const allFragmentsIndexes = Array.from({
-          length: allFragmentsAmount + 1,
-        }).map((_, index) =>
-          addLeadingZeros(index, `${allFragmentsAmount}`.length),
-        );
-        for (const fragment of allFragmentsIndexes) {
-          const m3u8FragmentPath = `${m3u8SrcFragmentsPath}/${fragment}.mp4`;
-          await fs.appendFileSync(
-            ffmpegPathsToCombine,
-            `file ${m3u8FragmentPath}\n`,
-          );
-        }
-        const promises = allFragmentsIndexes.map(async (fragment) => {
-          const m3u8FragmentPath = `${m3u8SrcFragmentsPath}/${fragment}.mp4`;
-          const writeStream = fs.createWriteStream(m3u8FragmentPath);
-          const urlToGet = m3u8Src.replace('720p.m3u8', `720p_${fragment}.ts`);
-          const response = await axios.get(urlToGet, {
-            responseType: 'stream',
-          });
+      const bucketParams = {
+        Bucket: 'scrapper-images-data',
+        Key: returnPath,
+        Body: fs.createReadStream(episodePath),
+        ACL: 'public-read',
+      };
 
-          response.data.pipe(writeStream);
-          await finished(writeStream);
-        });
-        await Promise.all(promises);
-        await executeCommand(
-          `ffmpeg -f concat -safe 0 -i paths.txt -c copy public/${returnPath}`,
-        );
-        console.log('executed');
-        rimraf('fragments', () => null);
-        rimraf('paths.txt', () => null);
-
-        return { url: returnUrl, availableQuality };
-      } else {
-        const writeStream = fs.createWriteStream(episodePath);
-        console.log(url, 'url');
-        const response = await axios.get(url, {
-          responseType: 'stream',
-        });
-        console.log(`uploading default version`);
-
-        response.data.pipe(writeStream);
-        await finished(writeStream);
-        returnUrl = `${process.env.CDN_URL}/${returnPath}`;
-        console.log(returnUrl, 'returnUrl');
-        const bucketParams = {
-          Bucket: 'scrapper-images-data',
-          Key: returnPath,
-          Body: fs.createReadStream(episodePath),
-          ACL: 'public-read',
-        };
-
-        await this.s3Client.putObject(bucketParams);
-      }
-      rimraf(videoPath, () => null);
-
+      await this.s3Client.putObject(bucketParams);
       return {
         url: returnUrl,
         availableQuality,
       };
+    } catch (e) {
+      console.log(e.response ?? e, 'retry', this.retryCounter);
+      if (e?.response?.status !== 404) {
+        if (this.retryCounter < 3) {
+          this.retryCounter++;
+          return this.downloadVideo({
+            url,
+            id,
+            episodeIndex,
+          });
+        } else {
+          this.retryCounter = 0;
+          return null;
+        }
+      }
     }
   };
 
@@ -245,18 +158,17 @@ export class FileService {
   uploadVideoCoverImage = async ({
     imageUrl,
     id,
+    episodeIndex,
   }: {
     imageUrl: string;
     id: string;
+    episodeIndex: string;
   }) => {
     try {
-      if (!fs.existsSync(`public/videos/${id}`)) {
-        fs.mkdirSync(`public/videos/${id}`, { recursive: true });
-      }
       const response = await axios.get<string>(imageUrl, {
         responseType: 'arraybuffer',
       });
-      const returnPath = `videos/${id}/cover.webp`;
+      const returnPath = `videos/${id}/episode-${episodeIndex}.png`;
       const bucketParams = {
         Bucket: 'scrapper-images-data',
         Key: returnPath,
@@ -264,18 +176,12 @@ export class FileService {
         ACL: 'public-read',
       };
       await this.s3Client.send(new PutObjectCommand(bucketParams));
-      const PNGBase64 = Buffer.from(response.data, 'binary').toString('base64');
-      const tempPath = `public/videos/${id}/cover.webp`;
-      await fs.writeFile(tempPath, PNGBase64, 'base64', (err) => {
-        if (err) throw err;
-        this.retryCounter = 0;
-      });
       const url = `${process.env.CDN_URL}/${returnPath}`;
       return { url };
     } catch (e) {
       this.retryCounter++;
       if (this.retryCounter < 5) {
-        await this.uploadVideoCoverImage({ imageUrl, id });
+        await this.uploadVideoCoverImage({ imageUrl, id, episodeIndex });
         this.logService.saveLog(
           `ERROR HAPPENED, ${imageUrl}, ${JSON.stringify(e)}`,
           'warn',
@@ -344,7 +250,7 @@ export class FileService {
           total,
         );
         this.logService.saveLog(
-          `ERROR HAPPENED, ${imageUrl}, ${referer}, ${JSON.stringify(e)}`,
+          `ERROR HAPPENED, ${imageUrl}, ${referer}, ${e}`,
           'warn',
         );
       }

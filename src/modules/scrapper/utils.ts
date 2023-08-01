@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { HitomiFields } from 'src/shared/enums/HitomiFields';
 import { chunkArray } from 'src/shared/utils';
+import * as cheerio from 'cheerio';
 
 export const findDuplicateTitle = async (
   detailsData: Record<HitomiFields, any>,
@@ -105,4 +106,142 @@ export const sendImages = async ({
   }
   const albumUrl = `${process.env.CLIENT_URL}/album/${album.data}/`;
   return albumUrl;
+};
+
+const extractTitleLink = async (url: string) => {
+  try {
+    const htmlData = await axios.get(url);
+    const $ = cheerio.load(htmlData.data);
+    const titleReferenceLink = $('div.seriesmeta a').attr('href');
+    return titleReferenceLink;
+  } catch (error) {
+    console.log('extractTitleLink', error);
+    return null;
+  }
+};
+
+const extractTableTitleLink = async (url: string) => {
+  try {
+    const htmlData = await axios.get(url);
+    const $ = cheerio.load(htmlData.data);
+    const titleReferenceLink = $('div.seriesmeta a').attr('href');
+    return titleReferenceLink;
+  } catch (error) {
+    console.log('extractTableTitleLink', error);
+    return null;
+  }
+};
+
+export const selectVideoReferencesToParse = async ({
+  url,
+}: {
+  url: string;
+}) => {
+  try {
+    const htmlData = await axios.get(url);
+    const titleReferenceLinks = [];
+    const $ = cheerio.load(htmlData.data);
+    const listContentClass = 'div.nag div.item';
+    const videoUrls = $(listContentClass)
+      .map((i, item) => $(item).find('div.data h2 a').attr('href'))
+      .get()
+      .reverse();
+    for (const videoUrl of videoUrls) {
+      try {
+        console.log('reading:', videoUrl);
+        const videoHtmlData = await axios.get(videoUrl);
+        const $episodeVideo = cheerio.load(videoHtmlData.data);
+        const episodeLinks = $episodeVideo('div#linkwrapper table tbody tr')
+          .map((_, item) => {
+            const url = $(item).find('a').attr('href');
+            if (url) {
+              return `${process.env.VIDEO_SCRAPPER_HOST}/${url}`;
+            }
+          })
+          .get();
+        const isTableType = !!episodeLinks?.length;
+        if (isTableType) {
+          if (episodeLinks[0]?.includes('episode-list')) {
+            titleReferenceLinks.push(episodeLinks[0]);
+          } else {
+            const titleReferenceLink = await extractTableTitleLink(
+              episodeLinks[0],
+            );
+            if (titleReferenceLink) {
+              titleReferenceLinks.push(titleReferenceLink);
+            }
+          }
+        } else {
+          const titleReferenceLink = await extractTitleLink(videoUrl);
+          if (titleReferenceLink) {
+            titleReferenceLinks.push(titleReferenceLink);
+          }
+        }
+      } catch (e) {
+        console.log('selectVideoReferencesToParse', videoUrl);
+      }
+    }
+    return titleReferenceLinks;
+  } catch (error) {
+    console.log('selectVideoReferencesToParse', error);
+    return [];
+  }
+};
+
+const extractVideoUrl = async ({
+  url,
+  title,
+}: {
+  url: string;
+  title: string;
+}) => {
+  try {
+    const htmlData = await axios.get(url);
+    const $ = cheerio.load(htmlData.data);
+    const videoSrc =
+      $('#fluid_video_wrapper_my-video video.fluidplayer source').attr('src') ||
+      $("source[type='video/mp4']").attr('src');
+    if (videoSrc.startsWith('https://') && videoSrc.endsWith('mp4')) {
+      return videoSrc;
+    } else {
+      console.log('broken url', title, url, videoSrc);
+      return null;
+    }
+  } catch (e) {
+    console.log('extractVideoUrl', e, url);
+    return null;
+  }
+};
+
+export const extractTitlesData = async (titleReferenceLinks: string[]) => {
+  const resultMap = new Map<
+    string,
+    { title: string; videos: { url: string; episodeIndex: number }[] }
+  >();
+  console.log(titleReferenceLinks, 'titleReferenceLinks');
+  for (const titleReferenceLink of titleReferenceLinks) {
+    try {
+      const titleHtmlData = await axios.get(titleReferenceLink);
+      const $ = cheerio.load(titleHtmlData.data);
+      const title = $('div.loop-header h1.loop-title em').text();
+      const listContentClass = 'div.nag div.item';
+      const episodeUrls = $(listContentClass)
+        .map((i, item) => $(item).find('div.data h2 a').attr('href'))
+        .get()
+        .reverse();
+      const videos = [];
+      let episodeIndex = 1;
+      for (const episodeUrl of episodeUrls.reverse()) {
+        const videoUrl = await extractVideoUrl({ url: episodeUrl, title });
+        if (videoUrl) {
+          videos.push({ url: videoUrl, episodeIndex });
+        }
+        episodeIndex++;
+      }
+      resultMap.set(title, { title, videos });
+    } catch (error) {
+      console.log('extractTitlesData', error.response, titleReferenceLink);
+    }
+  }
+  return resultMap;
 };

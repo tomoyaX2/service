@@ -14,6 +14,7 @@ import {
   findDuplicateTitle,
   sendImages,
 } from './utils';
+import * as rimraf from 'rimraf';
 
 const expectedClassNames = [
   ExpectedTypes.Manga,
@@ -49,7 +50,7 @@ export class ScrapperService {
     this.browser = browser;
     const page = await browser.newPage();
 
-    const lastPageIndex = 200;
+    const lastPageIndex = 600;
     const pages = Array.from(Array(lastPageIndex).keys()).reverse();
     for (const pageIndex of pages) {
       if (this.isStopped) {
@@ -119,6 +120,7 @@ export class ScrapperService {
             albumId,
             albumIndex,
           });
+          rimraf(`/public/${albumId}`, () => null);
         }
       }
     } catch (e) {

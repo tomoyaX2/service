@@ -7,8 +7,10 @@ import axios from 'axios';
 import * as chromeLauncher from 'chrome-launcher';
 import * as util from 'util';
 import * as request from 'request';
+import * as fs from 'fs';
+import { selectVideoReferencesToParse, extractTitlesData } from './utils';
 import * as uuid from 'uuid';
-import { exec } from 'child_process';
+import * as rimraf from 'rimraf';
 
 interface Video {
   id: string;
@@ -24,13 +26,13 @@ interface Video {
   studios: string[];
   episodes: { url: string; name: string; availableQuality: string[] }[];
 }
-
 @Injectable()
 export class VideoService {
   browser: puppeteer.Browser;
   hostUrl = process.env.SCRAPPER_HOST;
   isStopped = false;
   index = 0;
+  videoDetailsRetryCounter = 0;
   constructor(
     private readonly logService: LogService,
     private readonly fileService: FileService,
@@ -54,274 +56,324 @@ export class VideoService {
     });
     this.browser = browser;
 
-    const lastPageIndex = 41;
+    const lastPageIndex = 60;
     const pages = Array.from(Array(lastPageIndex).keys()).reverse();
     for (const pageIndex of pages) {
-      const htmlData = await axios.get(
-        `${process.env.VIDEO_SCRAPPER_HOST}/hentai-series/page/${pageIndex}`,
+      const titlesToParse = await selectVideoReferencesToParse({
+        url: `${process.env.VIDEO_SCRAPPER_HOST}/page/${pageIndex}`,
         // `${process.env.VIDEO_SCRAPPER_HOST}/series`,
-      );
-      const videosToParse = this.selectVideosToParse({
-        htmlData: htmlData.data,
       });
 
-      for (const video of videosToParse) {
-        try {
-          const pageData = await this.readVideoPage(video);
-          switch (pageData?.state) {
-            case 'uploaded': {
+      const titlesMap = await extractTitlesData(titlesToParse);
+
+      for (const title of titlesMap.keys()) {
+        const { data: exists } = await axios.post(
+          `${process.env.CLIENT_SERVER_URL}/videos/search-title`,
+          { title },
+          { timeout: 10000 },
+        );
+        if (!exists) {
+          const videoTempId = uuid.v4();
+          const result = {
+            id: videoTempId,
+            title: title,
+            episodes: [],
+            type: 'subtitles',
+            state: 'uploaded',
+            language: 'english',
+            studios: [],
+          } as Video;
+          const currentTitleVideos = titlesMap.get(title).videos;
+          for (const currentTitleVideo of currentTitleVideos) {
+            console.log(
+              `downloading: ${currentTitleVideo.url}, episode index: ${currentTitleVideo.episodeIndex}`,
+            );
+            const video = await this.fileService.downloadVideo({
+              url: currentTitleVideo.url,
+              id: videoTempId,
+              episodeIndex: currentTitleVideo.episodeIndex,
+            });
+            if (video) {
+              result.episodes.push({
+                ...video,
+                name: `Episode: ${currentTitleVideo.episodeIndex}`,
+              });
+            }
+          }
+          if (!!result.episodes.length) {
+            try {
               await axios.post(
                 `${process.env.CLIENT_SERVER_URL}/videos/scrapper-video`,
-                pageData,
+                result,
               );
-              console.log('posted video');
-              break;
-            }
-            case 'updated': {
-              await axios.post(
-                `${process.env.CLIENT_SERVER_URL}/videos/${pageData.id}`,
-                pageData,
-              );
-              console.log(
-                `url with title ${pageData?.title} present and episodes are full`,
-              );
-              break;
-            }
-            case 'skipped': {
-              console.log(`url with title ${pageData?.title} was skipped`);
-              break;
-            }
-            case 'failed': {
-              console.log(`url with title ${pageData?.title} failed`);
-              break;
+              console.log('was published');
+            } catch (e) {
+              console.log(e);
             }
           }
-        } catch (e) {
-          console.log(e?.message, e?.response, 'top level error');
+          rimraf(`public/videos/${videoTempId}`, () => null);
+        } else {
+          console.log(exists.title, 'ecxists');
         }
       }
     }
-  };
-
-  readVideoPage = async ({ url, title }: { url: string; title: string }) => {
-    console.log('reading: ', url, title);
-
-    const videoTempId = uuid.v4();
-    const result = {
-      id: videoTempId,
-      title,
-      episodes: [],
-      type: 'subtitles',
-      state: 'uploaded',
-      studios: [],
-    } as Video;
-    try {
-      const {
-        data: { data },
-      } = await axios.post(
-        `${process.env.CLIENT_SERVER_URL}/videos/search`,
-        {
-          page: 1,
-          perPage: 1,
-          title,
-        },
-        { timeout: 10000 },
-      );
-      const exists = data[0];
-      const htmlData = await axios.get(url);
-      const $ = cheerio.load(htmlData.data);
-      const coverUrl = $('div.sheader div.poster img').attr('data-src');
-      if (!exists) {
-        const videoCoverImage = await this.fileService.uploadVideoCoverImage({
-          id: result.id,
-          imageUrl: coverUrl,
-        });
-        result.coverImageUrl = videoCoverImage.url;
-        await $('#info1 div').map((index, element) => {
-          const className = $(element).attr('class');
-          switch (className) {
-            case 'wp-content': {
-              result.description = $(element).children('p').text();
-              break;
-            }
-            case 'custom_fields': {
-              const label = $(element).children('b.variante').text();
-              if (label === 'Original title') {
-                result.originalTitle = $(element).children('span.valor').text();
-              }
-              if (label === 'Studio') {
-                $(element)
-                  .children('span')
-                  .children('div')
-                  .children('div')
-                  .children('a')
-                  .map((_, el) => {
-                    result.studios.push($(el).text());
-                    return $(el).text();
-                  });
-              }
-              if (label === 'First air date') {
-                result.releaseDate = $(element).children('span.valor').text();
-              }
-              break;
-            }
-          }
-        });
-        result.type = 'subtitles'; //subtitles, original, voiced(single), voiced(many)
-        result.language = 'english'; //english, russian, japanese
-        result.tags = $('div.sgeneros a')
-          .map((i, item) => $(item).text().toLowerCase())
-          .get();
-      }
-      const episodesList = $('div.content div.items article')
-        .map((i, item) => {
-          const episode = $(item).find('a').attr('href');
-          return episode;
-        })
-        .get()
-        .reverse();
-      let episodeIndex = 1;
-      const hasLostEpisodes = exists?.episodes?.length !== episodesList.length;
-      if (exists && hasLostEpisodes) {
-        for (const episode of exists[0]?.episodes ?? []) {
-          console.log('remove episode', episode);
-          await this.fileService.removeEpisode(episode.url);
-          await axios.delete(
-            `${
-              process.env.CLIENT_SERVER_URL
-            }/episodes?episodeIds=${exists.episodes
-              .map((el) => el.id)
-              .join(',')}`,
-          );
-        }
-      }
-      if (!exists || hasLostEpisodes) {
-        for (const episode of episodesList) {
-          const htmlData = await axios.get(episode);
-          const $episodeReader = cheerio.load(htmlData.data);
-          const iframeUrl = $episodeReader(
-            'div.play-box-shortcode iframe',
-          ).attr('src');
-          const page = await this.browser.newPage();
-          await page.setRequestInterception(true);
-          let m3u8Src = '';
-          page.on('request', (request) => {
-            if (request.url().endsWith('.m3u8')) {
-              m3u8Src = request
-                .url()
-                .replace('playlist.m3u8', '720p/720p.m3u8');
-              request.abort();
-            } else {
-              request.continue();
-            }
-          });
-          await page.goto(iframeUrl);
-          let videoSrc = '';
-          await page.waitForTimeout(3000);
-          const iframeHtmlData = await page.evaluate(
-            () => document.querySelector('*').outerHTML,
-          );
-          const $iframeReader = cheerio.load(iframeHtmlData);
-          const type1 = $iframeReader('video.jw-video').attr('src');
-          const type2 = $iframeReader('video.vjs-tech').attr('src');
-          videoSrc = type1 ?? type2;
-          await page.waitForTimeout(3000);
-
-          page.close();
-
-          if (!!videoSrc || !!m3u8Src) {
-            const video = await this.fileService.downloadVideo({
-              url: videoSrc,
-              m3u8Src: m3u8Src,
-              id: result.id,
-              episodeIndex,
-            });
-            result.episodes = [
-              ...result.episodes,
-              {
-                url: video.url,
-                name: `Episode - ${episodeIndex}`,
-                availableQuality: video.availableQuality,
-              },
-            ];
-            console.log(`finished ${episodeIndex} of ${episodesList.length}`);
-          } else {
-            console.log(`skip ${episodeIndex} of ${episodesList.length}`);
-          }
-          episodeIndex++;
-        }
-        if (!result.episodes?.length) {
-          return { ...result, state: 'failed' };
-        }
-        if (hasLostEpisodes) {
-          console.log(exists, 'exists');
-
-          return {
-            id: exists.id,
-            episodes: result.episodes,
-            title: result.title,
-            state: 'updated',
-          };
-        }
-      }
-      if (!hasLostEpisodes && exists) {
-        return { ...result, state: 'skipped' };
-      }
-      return result;
-    } catch (e) {
-      console.log(e?.message || e, 'error parse');
-
-      return { ...result, state: 'failed' };
-    }
-  };
-
-  selectVideosToParse = ({ htmlData }: { htmlData: string }) => {
-    const $ = cheerio.load(htmlData);
-    const listContentClass = 'div.animation-3 article';
-    const videoUrls = $(listContentClass)
-      .map((i, item) => {
-        return {
-          url: $(item).find('div.poster a').attr('href'),
-          title: $(item).find('div.data h3 a').text(),
-        };
-      })
-      .get();
-
-    return videoUrls.reverse();
-  };
-
-  parsePage = async ({
-    url,
-    selector,
-    click,
-  }: {
-    url: string;
-    selector?: string;
-    click?: string;
-  }) => {
-    try {
-      if (this.isStopped) {
-        return;
-      }
-      const page = await this.browser.newPage();
-      page.setJavaScriptEnabled(false);
-
-      await page.goto(url);
-      if (!!click) {
-        page.click(click);
-      }
-      if (!!selector) {
-        await page.waitForSelector(selector);
-      }
-      const htmlData = await page.evaluate(
-        () => document.querySelector('*').outerHTML,
-      );
-      page.close();
-      return htmlData;
-    } catch (e) {}
   };
 
   stopVideoScrapper = async () => {
     this.isStopped = true;
+  };
+
+  initCollectVideoContent = async () => {
+    this.isStopped = false;
+    this.fileService.initS3();
+    const chrome = await chromeLauncher.launch({
+      chromeFlags: ['--headless'],
+      logLevel: 'info',
+      port: 9000,
+    });
+    const resp = await util.promisify(request)(
+      `http://127.0.0.1:${chrome.port}/json/version`,
+    );
+
+    const { webSocketDebuggerUrl } = JSON.parse(resp.body);
+    const browser = await puppeteer.connect({
+      browserWSEndpoint: webSocketDebuggerUrl,
+    });
+    this.browser = browser;
+    await this.startDetailsScrapping();
+  };
+
+  startDetailsScrapping = async () => {
+    const page = await this.browser.newPage();
+
+    await page.goto(process.env.VIDEO_DETAILS_SCRAPPER_HOST + '/search');
+    await page.waitForTimeout(1000);
+    const htmlData = await page.evaluate(
+      () => document.querySelector('*').outerHTML,
+    );
+    const $ = cheerio.load(htmlData);
+    const paginationItems = $('ul.pagination li')
+      .map((index, item) => {
+        const pageNumberItem = $(item).find('button.pagination__item').text();
+        return pageNumberItem;
+      })
+      .get();
+    const lastPage = paginationItems[paginationItems.length - 2]; // real last page is located on this index, count strats from 0
+
+    const pageIndexes = Array.from({ length: parseInt(lastPage) }).map(
+      (_, index) => index,
+    );
+    const skippedMap = new Map();
+    for (const pageIndex of pageIndexes) {
+      if (pageIndex === 0) {
+        await this.collectEpisodes($, skippedMap);
+      } else {
+        const [paginationItem] = await page.$x(
+          `//button[contains(., '${pageIndex + 1}')]`,
+        );
+        await paginationItem.click();
+        await page.waitForTimeout(3000);
+        const htmlData = await page.evaluate(
+          () => document.querySelector('*').outerHTML,
+        );
+        const $ = cheerio.load(htmlData);
+        await this.collectEpisodes($, skippedMap);
+      }
+    }
+    console.log('finished', skippedMap.keys());
+  };
+
+  collectEpisodes = async (
+    $: cheerio.CheerioAPI,
+    skippedMap: Map<any, any>,
+  ) => {
+    const episodeLinks = $('div.search-result a.search-result__item')
+      .map(
+        (index, item) =>
+          `${process.env.VIDEO_DETAILS_SCRAPPER_HOST + $(item).attr('href')}`,
+      )
+      .get();
+    const page = await this.browser.newPage();
+    try {
+      for (const episodeLink of episodeLinks) {
+        await page.goto(episodeLink);
+        await page.waitForTimeout(1000);
+        const episodeHtmlData = await page.evaluate(
+          () => document.querySelector('*').outerHTML,
+        );
+        const detailsData = await this.collectEpisodeData(episodeHtmlData);
+
+        const { data: existsVideo } = await axios.get(
+          `${process.env.CLIENT_SERVER_URL}/videos/search-title/${detailsData.title}`,
+        );
+
+        if (!!existsVideo) {
+          let uploadedCoverUrl = '';
+          const currentEpisode = existsVideo.episodes?.find(
+            (el) => el.name === `Episode - ${detailsData.episodeIndex}`,
+          );
+          if (currentEpisode?.id && !currentEpisode?.coverUrl) {
+            const imageData = await this.fileService.uploadVideoCoverImage({
+              imageUrl: detailsData.coverUrl,
+              id: existsVideo.id,
+              episodeIndex: detailsData.episodeIndex,
+            });
+            uploadedCoverUrl = imageData.url;
+            await axios.post(
+              `${process.env.CLIENT_SERVER_URL}/episodes/${currentEpisode?.id}/update-cover`,
+              { coverUrl: uploadedCoverUrl },
+            );
+          } else {
+            console.log(
+              `${detailsData.title} episode ${detailsData.episodeIndex} has uploaded coverUrl`,
+            );
+          }
+          await axios.patch(
+            `${process.env.CLIENT_SERVER_URL}/videos/${existsVideo.id}/update-tags`,
+            { tags: detailsData.tags },
+          );
+
+          if (detailsData.episodeIndex === '1') {
+            const dataToSend = {} as any;
+            if (detailsData.title) {
+              dataToSend.title = detailsData.title;
+            }
+            if (detailsData.releaseDate) {
+              dataToSend.releaseDate = detailsData.releaseDate;
+            }
+            if (detailsData.coverUrl) {
+              dataToSend.coverImageUrl = uploadedCoverUrl;
+            }
+            await axios.patch(
+              `${process.env.CLIENT_SERVER_URL}/videos/${existsVideo.id}`,
+              dataToSend,
+            );
+          }
+        } else {
+          console.log(
+            'was skipped',
+            JSON.stringify({ title: detailsData.title }),
+          );
+          await fs.appendFileSync(
+            'public/skipped.json',
+            JSON.stringify({ title: detailsData.title }) + ', ',
+          );
+          skippedMap.set(detailsData.title, true);
+        }
+      }
+      await page.close();
+    } catch (e) {
+      await page.close();
+
+      if (this.videoDetailsRetryCounter < 5) {
+        this.videoDetailsRetryCounter++;
+        this.collectEpisodes($, skippedMap);
+      } else {
+        this.videoDetailsRetryCounter = 0;
+      }
+    }
+  };
+
+  collectEpisodeData = async (episodeHtmlData: string) => {
+    const $ = cheerio.load(episodeHtmlData);
+    const titleText = $('h1.tv-title').text();
+    const title = titleText.substring(0, titleText.length - 2);
+    const episodeIndex = titleText.substring(
+      titleText.length - 1,
+      titleText.length,
+    );
+    const tags = $('div.hvpi-summary div.hvpis-text a')
+      .map((index, item) => {
+        return $(item).find('div.btn__content').text();
+      })
+      .get();
+    const coverUrl = $('div.hvpi-cover-container img').attr('src');
+    let releaseDate = '';
+    let brand = '';
+    $('div.hvpim-brand-censor div.flex div.hvpimbc-item').map((index, item) => {
+      const label = $(item).find('div.hvpimbc-header').text();
+      const text = $(item).find('div.hvpimbc-text').text();
+      const brandLabel = $(item).find('a.hvpimbc-text').text();
+      if (label === 'Release Date') {
+        releaseDate = text;
+      }
+      if (label === 'Brand') {
+        brand = brandLabel;
+      }
+    });
+
+    return { title, tags, coverUrl, releaseDate, brand, episodeIndex };
+  };
+
+  processSingleUrl = async (url: string, videoId: string) => {
+    this.fileService.initS3();
+    const chrome = await chromeLauncher.launch({
+      chromeFlags: ['--headless'],
+      logLevel: 'info',
+      port: 9000,
+    });
+    const resp = await util.promisify(request)(
+      `http://127.0.0.1:${chrome.port}/json/version`,
+    );
+
+    const { webSocketDebuggerUrl } = JSON.parse(resp.body);
+    const browser = await puppeteer.connect({
+      browserWSEndpoint: webSocketDebuggerUrl,
+    });
+    this.browser = browser;
+    const page = await this.browser.newPage();
+    await page.goto(url);
+    await page.waitForTimeout(1000);
+    const episodeHtmlData = await page.evaluate(
+      () => document.querySelector('*').outerHTML,
+    );
+    const detailsData = await this.collectEpisodeData(episodeHtmlData);
+
+    const { data: existsVideo } = await axios.get(
+      `${process.env.CLIENT_SERVER_URL}/videos/${videoId}`,
+    );
+    let uploadedCoverUrl = '';
+    const currentEpisode = existsVideo.episodes?.find(
+      (el) => el.name === `Episode - ${detailsData.episodeIndex}`,
+    );
+    if (currentEpisode?.id && !currentEpisode?.coverUrl) {
+      const imageData = await this.fileService.uploadVideoCoverImage({
+        imageUrl: detailsData.coverUrl,
+        id: existsVideo.id,
+        episodeIndex: detailsData.episodeIndex,
+      });
+      uploadedCoverUrl = imageData.url;
+      await axios.post(
+        `${process.env.CLIENT_SERVER_URL}/episodes/${currentEpisode?.id}/update-cover`,
+        { coverUrl: uploadedCoverUrl },
+      );
+    } else {
+      console.log(
+        `${detailsData.title} episode ${detailsData.episodeIndex} has uploaded coverUrl`,
+      );
+    }
+    await axios.patch(
+      `${process.env.CLIENT_SERVER_URL}/videos/${existsVideo.id}/update-tags`,
+      { tags: detailsData.tags },
+    );
+
+    if (detailsData.episodeIndex === '1') {
+      const dataToSend = {} as any;
+      if (detailsData.title) {
+        dataToSend.title = detailsData.title;
+      }
+      if (detailsData.releaseDate) {
+        dataToSend.releaseDate = detailsData.releaseDate;
+      }
+      if (detailsData.coverUrl) {
+        dataToSend.coverImageUrl = uploadedCoverUrl;
+      }
+      await axios.patch(
+        `${process.env.CLIENT_SERVER_URL}/videos/${existsVideo.id}`,
+        dataToSend,
+      );
+    }
+    await page.close();
+    console.log('finished');
   };
 }
