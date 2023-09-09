@@ -1,4 +1,4 @@
 export class ScrapSingleDto {
-  videoId: string;
+  videoUrl: string;
   url: string;
 }

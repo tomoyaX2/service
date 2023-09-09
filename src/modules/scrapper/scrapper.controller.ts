@@ -1,13 +1,17 @@
 import { Body, Controller, Get, Post } from '@nestjs/common';
 import { ScrapperService } from './scrapper.service';
-import { VideoService } from './video.service';
+import { VideoService } from './video/video.service';
 import { ScrapSingleDto } from './scrapper.dto';
+import { HAnimeDetailsService } from './video/hanime-details';
+import { HeantaiHeavenDetailsService } from './video/hentaiheaven-details';
 
 @Controller('scrapper')
 export class ScrapperController {
   constructor(
     private readonly scrapperService: ScrapperService,
     private readonly videoService: VideoService,
+    private readonly hanimeDetailService: HAnimeDetailsService,
+    private readonly HeantaiHeavenDetails: HeantaiHeavenDetailsService,
   ) {}
 
   @Get('start-manga')
@@ -20,14 +24,19 @@ export class ScrapperController {
     this.videoService.init();
   }
 
-  @Get('start-video-details')
+  @Get('hanime/details')
   initVideoDetails(): void {
-    this.videoService.initCollectVideoContent();
+    this.hanimeDetailService.initCollectVideoContent();
   }
 
-  @Post('scrap-video')
+  @Post('hanime/scrap-video')
   initHhVideoDetails(@Body() body: ScrapSingleDto) {
-    this.videoService.processSingleUrl(body.url, body.videoId);
+    this.hanimeDetailService.processSingleUrl(body.url, body.videoUrl);
+  }
+
+  @Post('hetaiheaven/scrap-video')
+  initHHVideoDetails(@Body() body: ScrapSingleDto): void {
+    this.HeantaiHeavenDetails.processSingleUrl(body.url, body.videoUrl);
   }
 
   @Get('stop')
