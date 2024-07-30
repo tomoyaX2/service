@@ -36,6 +36,57 @@ export class VideoService {
     private readonly fileService: FileService,
   ) {}
 
+  uplaodEpisodeToVideoById = async (
+    url: string,
+    videoId: string,
+    episodeIndex: number,
+  ) => {
+    this.fileService.initS3();
+
+    const videoTempId = uuid.v4();
+    const currentVideo = await axios.get(
+      `${process.env.CLIENT_SERVER_URL}/videos/${videoId}`,
+    );
+    const existsEpisode = currentVideo.data.episodes.find(
+      (el) => el.name === `Episode: ${episodeIndex}`,
+    );
+    console.log(existsEpisode, 'exists');
+    if (existsEpisode) {
+      await this.fileService.removeVideo(existsEpisode.url);
+      console.log('removed');
+      await this.fileService.replaceVideo({
+        url,
+        episodeIndex,
+        replaceUrl: existsEpisode.url.replace(`${process.env.CDN_URL}/`, ''),
+        id: currentVideo.data.id,
+      });
+      console.log('replaced');
+    } else {
+      const video = await this.fileService.downloadVideo({
+        url,
+        id: currentVideo.data.id,
+        episodeIndex,
+      });
+      console.log('downloaded', video);
+      if (video) {
+        await axios.patch(
+          `${process.env.CLIENT_SERVER_URL}/videos/${currentVideo.data.id}`,
+          {
+            title: currentVideo.data.title,
+            releaseDate: currentVideo.data.releaseDate,
+            episodes: [
+              {
+                ...video,
+                name: `Episode: ${episodeIndex}`,
+              },
+            ],
+          },
+        );
+      }
+    }
+    rimraf(`public/videos/${videoTempId}`, () => null);
+  };
+
   init = async (): Promise<void> => {
     this.isStopped = false;
     this.fileService.initS3();
@@ -54,7 +105,7 @@ export class VideoService {
     });
     this.browser = browser;
 
-    const lastPageIndex = 6;
+    const lastPageIndex = 16;
     const pages = Array.from(Array(lastPageIndex).keys()).reverse();
     for (const pageIndex of pages) {
       const titlesToParse = await selectVideoReferencesToParse({

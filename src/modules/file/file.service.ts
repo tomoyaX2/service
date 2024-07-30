@@ -34,6 +34,65 @@ export class FileService {
     this.s3Client = s3Client;
   }
 
+  replaceVideo = async ({
+    url,
+    id,
+    episodeIndex,
+    replaceUrl,
+  }: {
+    url: string;
+    id: string;
+    episodeIndex: number;
+    replaceUrl: string;
+  }) => {
+    try {
+      const episodeId = uuid.v4();
+      const videoPath = `public/videos/${id}`;
+      const availableQuality = [];
+      const episodePath = `${videoPath}/${episodeId}.mp4`;
+      console.log(episodePath, 'replaceUrl');
+
+      if (!fs.existsSync(videoPath)) {
+        fs.mkdirSync(videoPath, { recursive: true });
+      }
+      const finished = promisify(stream.finished);
+      const writeStream = fs.createWriteStream(episodePath);
+      const response = await axios.get(url, {
+        responseType: 'stream',
+      });
+
+      response.data.pipe(writeStream);
+      await finished(writeStream);
+      const bucketParams = {
+        Bucket: 'scrapper-images-data',
+        Key: replaceUrl,
+        Body: fs.createReadStream(episodePath),
+        ACL: 'public-read',
+      };
+
+      await this.s3Client.putObject(bucketParams as any);
+      return {
+        url: replaceUrl,
+        availableQuality,
+      };
+    } catch (e) {
+      console.log(e.response ?? e, 'retry', this.retryCounter);
+      if (e?.response?.status !== 404) {
+        if (this.retryCounter < 3) {
+          this.retryCounter++;
+          return this.downloadVideo({
+            url,
+            id,
+            episodeIndex,
+          });
+        } else {
+          this.retryCounter = 0;
+          return null;
+        }
+      }
+    }
+  };
+
   downloadVideo = async ({
     url,
     id,
@@ -56,6 +115,7 @@ export class FileService {
       }
       const finished = promisify(stream.finished);
       const writeStream = fs.createWriteStream(episodePath);
+      console.log('download start');
       const response = await axios.get(url, {
         responseType: 'stream',
       });
@@ -63,7 +123,7 @@ export class FileService {
       response.data.pipe(writeStream);
       await finished(writeStream);
       returnUrl = `${process.env.CDN_URL}/${returnPath}`;
-
+      console.log('download finish');
       const bucketParams = {
         Bucket: 'scrapper-images-data',
         Key: returnPath,
@@ -71,7 +131,8 @@ export class FileService {
         ACL: 'public-read',
       };
 
-      await this.s3Client.putObject(bucketParams);
+      await this.s3Client.putObject(bucketParams as any);
+      console.log('uploaded');
       return {
         url: returnUrl,
         availableQuality,
@@ -124,7 +185,7 @@ export class FileService {
           ACL: 'public-read',
         };
 
-        this.s3Client.putObject(bucketParams);
+        this.s3Client.putObject(bucketParams as any);
       });
 
       archive.pipe(output);
@@ -175,7 +236,7 @@ export class FileService {
         Body: response.data,
         ACL: 'public-read',
       };
-      await this.s3Client.send(new PutObjectCommand(bucketParams));
+      await this.s3Client.send(new PutObjectCommand(bucketParams as any));
       const url = `${process.env.CDN_URL}/${returnPath}`;
       return { url };
     } catch (e) {
@@ -224,7 +285,7 @@ export class FileService {
       };
 
       const { width, height } = sizeOf(Buffer.from(response.data));
-      await this.s3Client.send(new PutObjectCommand(bucketParams));
+      await this.s3Client.send(new PutObjectCommand(bucketParams as any));
       const PNGBase64 = Buffer.from(response.data, 'binary').toString('base64');
       const tempPath = `public/${albumId}/${10000 + currentCount}.webp`;
       await fs.writeFile(tempPath, PNGBase64, 'base64', (err) => {
@@ -292,7 +353,7 @@ export class FileService {
     }
   };
 
-  removeEpisode = async (url: string) => {
+  removeVideo = async (url: string) => {
     await this.s3Client.send(
       new DeleteObjectCommand({
         Bucket: 'scrapper-images-data',

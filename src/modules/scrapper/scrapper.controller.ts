@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Post } from '@nestjs/common';
 import { ScrapperService } from './scrapper.service';
 import { VideoService } from './video/video.service';
-import { ScrapSingleDto } from './scrapper.dto';
+import { ScrapSingleDto, classUploadVideoUrl } from './scrapper.dto';
 import { HAnimeDetailsService } from './video/hanime-details';
 import { HeantaiHeavenDetailsService } from './video/hentaiheaven-details';
 
@@ -22,6 +22,15 @@ export class ScrapperController {
   @Get('start-video')
   initVideo(): void {
     this.videoService.init();
+  }
+
+  @Post('upload-video')
+  uploadVideo(@Body() body: classUploadVideoUrl) {
+    this.videoService.uplaodEpisodeToVideoById(
+      body.url,
+      body.videoId,
+      body.episodeIndex,
+    );
   }
 
   @Get('hanime/details')

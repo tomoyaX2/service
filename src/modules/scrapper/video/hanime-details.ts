@@ -24,7 +24,7 @@ export class HAnimeDetailsService {
     const chrome = await chromeLauncher.launch({
       chromeFlags: ['--headless'],
       logLevel: 'info',
-      port: 9000,
+      port: 9001,
     });
     const resp = await util.promisify(request)(
       `http://127.0.0.1:${chrome.port}/json/version`,
@@ -40,7 +40,6 @@ export class HAnimeDetailsService {
 
   startDetailsScrapping = async () => {
     const page = await this.browser.newPage();
-
     await page.goto(process.env.HANIME_DETAILS_SCRAPPER_HOST + '/search');
     await page.waitForTimeout(1000);
     const htmlData = await page.evaluate(
@@ -85,9 +84,10 @@ export class HAnimeDetailsService {
     const episodeLinks = $('div.search-result a.search-result__item')
       .map(
         (index, item) =>
-          `${process.env.VIDEO_DETAILS_SCRAPPER_HOST + $(item).attr('href')}`,
+          `${process.env.HANIME_DETAILS_SCRAPPER_HOST + $(item).attr('href')}`,
       )
       .get();
+    console.log(episodeLinks, 'episodeLinks');
     const page = await this.browser.newPage();
     try {
       for (const episodeLink of episodeLinks) {
@@ -209,7 +209,7 @@ export class HAnimeDetailsService {
       const chrome = await chromeLauncher.launch({
         chromeFlags: ['--headless'],
         logLevel: 'info',
-        port: 9000,
+        port: 9002,
       });
       const resp = await util.promisify(request)(
         `http://127.0.0.1:${chrome.port}/json/version`,

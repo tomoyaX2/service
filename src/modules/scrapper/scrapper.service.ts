@@ -15,6 +15,7 @@ import {
   sendImages,
 } from './utils';
 import * as rimraf from 'rimraf';
+import axios from 'axios';
 
 const expectedClassNames = [
   ExpectedTypes.Manga,
@@ -50,7 +51,7 @@ export class ScrapperService {
     this.browser = browser;
     const page = await browser.newPage();
 
-    const lastPageIndex = 100;
+    const lastPageIndex = 500;
     const pages = Array.from(Array(lastPageIndex).keys()).reverse();
     for (const pageIndex of pages) {
       if (this.isStopped) {
@@ -60,7 +61,7 @@ export class ScrapperService {
       this.logService.saveLog(`${pageIndex}/${lastPageIndex} page`);
       const htmlData = await this.parsePage({
         page,
-        url: this.hostUrl + `/?page=${pageIndex - 1}`,
+        url: this.hostUrl + `?page=${pageIndex - 1}`,
         selector: 'img.lazyload',
       });
       await this.processData(page, this.isStopped ? '' : htmlData);
@@ -76,12 +77,8 @@ export class ScrapperService {
         return;
       }
       const urls = await this.generateUrlsToParse(htmlData);
-
       let albumIndex = 0;
       for (const url of urls) {
-        if (this.isStopped) {
-          return;
-        }
         albumIndex++;
         this.logService.saveLog(`${albumIndex}/${urls.length} urls`);
         const detailsData = await this.collectDetailsData(page, url);
@@ -93,9 +90,6 @@ export class ScrapperService {
           let imageIndex = 0;
           const albumId = uuidv4();
           for (const image of detailsData.images) {
-            if (this.isStopped) {
-              return;
-            }
             imageIndex++;
             const imageToUpload = await this.fileService.uploadImage(
               image,
@@ -120,7 +114,7 @@ export class ScrapperService {
             albumId,
             albumIndex,
           });
-          rimraf(`/public/${albumId}`, () => null);
+          rimraf(`public/${albumId}`, () => null);
         }
       }
     } catch (e) {
@@ -178,11 +172,14 @@ export class ScrapperService {
       if (this.isStopped) {
         return;
       }
+      console.log(url, 'htmlData');
+
       const htmlData = await this.parsePage({
         page,
         url: `${url}#1`,
         selector: '.gallery-preview',
       });
+
       const $ = cheerio.load(htmlData);
       const fieldData = {} as Record<HitomiFields, any>;
       const bannedTags = process.env.BANNED_TAGS.split(',');
