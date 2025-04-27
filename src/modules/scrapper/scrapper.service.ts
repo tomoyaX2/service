@@ -16,6 +16,7 @@ import {
 } from './utils';
 import * as rimraf from 'rimraf';
 import axios from 'axios';
+import { chunkArray } from 'src/shared/utils';
 
 const expectedClassNames = [
   ExpectedTypes.Manga,
@@ -51,7 +52,7 @@ export class ScrapperService {
     this.browser = browser;
     const page = await browser.newPage();
 
-    const lastPageIndex = 500;
+    const lastPageIndex = 2000;
     const pages = Array.from(Array(lastPageIndex).keys()).reverse();
     for (const pageIndex of pages) {
       if (this.isStopped) {
@@ -64,58 +65,65 @@ export class ScrapperService {
         url: this.hostUrl + `?page=${pageIndex - 1}`,
         selector: 'img.lazyload',
       });
-      await this.processData(page, this.isStopped ? '' : htmlData);
+      await this.processData(this.isStopped ? '' : htmlData);
       if (pageIndex - 1 === 0) {
         await browser.close();
       }
     }
   };
 
-  processData = async (page: puppeteer.Page, htmlData: string) => {
+  processData = async (htmlData: string) => {
     try {
       if (this.isStopped) {
         return;
       }
       const urls = await this.generateUrlsToParse(htmlData);
-      let albumIndex = 0;
-      for (const url of urls) {
-        albumIndex++;
-        this.logService.saveLog(`${albumIndex}/${urls.length} urls`);
-        const detailsData = await this.collectDetailsData(page, url);
-        const isDuplicate = await findDuplicateTitle(detailsData);
-        const isBanned = await checkIfBannedTitle(detailsData);
+      const chunks = chunkArray(urls, 9);
+      for (const urlsChunk of chunks) {
+        await Promise.allSettled(
+          urlsChunk.map(async (url, albumIndex) => {
+            const browser = await puppeteer.launch();
+            const page = await browser.newPage();
 
-        if (allowToParse({ detailsData, isDuplicate, isBanned })) {
-          const imageData = [];
-          let imageIndex = 0;
-          const albumId = uuidv4();
-          for (const image of detailsData.images) {
-            imageIndex++;
-            const imageToUpload = await this.fileService.uploadImage(
-              image,
-              albumId,
-              imageIndex,
-              detailsData.images.length,
-            );
-            imageData.push(imageToUpload);
-          }
-          const downloadPath = await this.fileService.buildAlbumArchive({
-            albumId,
-            imageData,
-          });
-          const extendedDetailsData = extendDetailsData({
-            downloadPath,
-            imageData,
-          });
-          Object.assign(detailsData, extendedDetailsData);
-          await sendImages({
-            imageData,
-            detailsData,
-            albumId,
-            albumIndex,
-          });
-          rimraf(`public/${albumId}`, () => null);
-        }
+            this.logService.saveLog(`${albumIndex}/${urls.length} urls`);
+            const detailsData = await this.collectDetailsData(page, url);
+            const isDuplicate = await findDuplicateTitle(detailsData);
+            const isBanned = await checkIfBannedTitle(detailsData);
+
+            if (allowToParse({ detailsData, isDuplicate, isBanned })) {
+              const imageData = [];
+              let imageIndex = 0;
+              const albumId = uuidv4();
+              for (const image of detailsData.images) {
+                imageIndex++;
+                const imageToUpload = await this.fileService.uploadImage(
+                  image,
+                  albumId,
+                  imageIndex,
+                  detailsData.images.length,
+                );
+                imageData.push(imageToUpload);
+              }
+              const downloadPath = await this.fileService.buildAlbumArchive({
+                albumId,
+                imageData,
+              });
+              const extendedDetailsData = extendDetailsData({
+                downloadPath,
+                imageData,
+              });
+              Object.assign(detailsData, extendedDetailsData);
+              await sendImages({
+                imageData,
+                detailsData,
+                albumId,
+                albumIndex,
+              });
+              await rimraf(`public/${albumId}`, () => null);
+            }
+            await browser.close();
+          }),
+        );
       }
     } catch (e) {
       console.log(e, 'e');
@@ -172,7 +180,6 @@ export class ScrapperService {
       if (this.isStopped) {
         return;
       }
-      console.log(url, 'htmlData');
 
       const htmlData = await this.parsePage({
         page,
@@ -223,7 +230,9 @@ export class ScrapperService {
       }
 
       return fieldData;
-    } catch (e) {}
+    } catch (e) {
+      console.log(e, 'e');
+    }
   };
 
   stopScrapper = async () => {
